@@ -183,9 +183,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const recipientSocketIds = this.getSocketIdsByEmail(recipient);
     const senderSocketIds = this.getSocketIdsByEmail(sender);
     const recipients = recipientSocketIds ? [...recipientSocketIds, ...senderSocketIds] : [];
-
-    console.log(clientId)
-
+    
     if (recipients && recipients.length > 0) {
       recipients.forEach(socketId => {
         if(socketId!==clientId){
