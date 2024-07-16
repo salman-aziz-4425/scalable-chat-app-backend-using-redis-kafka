@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 
 import { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity-class-or-schema.type';
 import { User } from 'user/src/models/user.model';
+import { Message } from 'user/src/models/message.model';
 
 @Module({
   imports: [
@@ -21,7 +22,7 @@ import { User } from 'user/src/models/user.model';
         database: configService.get<string>('DATABASE_NAME'),
         synchronize: true,
         entities: [
-           User,
+           User,Message
           ],
           ssl: {
             rejectUnauthorized: false,

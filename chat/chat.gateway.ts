@@ -2,6 +2,10 @@ import { SubscribeMessage, WebSocketGateway, WebSocketServer, OnGatewayInit, OnG
 import { Server, Socket } from 'socket.io';
 import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
+import { Kafka } from 'kafkajs';
+import { DeepPartial, Repository } from 'typeorm';
+import { Message } from 'user/src/models/message.model';
+import { InjectRepository } from '@nestjs/typeorm';
 
 
 @WebSocketGateway({
@@ -17,8 +21,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private connectedUsers: Map<string, string[]> = new Map();
   private pub: Redis;
   private sub: Redis;
+  private producer:any;
+  private cosumer:any;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(private readonly configService: ConfigService,
+    @InjectRepository(Message)
+    private readonly messageRepository: Repository<Message>) {
     const redisInfo={
       host:  this.configService.get<string>('REDIS_DATABASE_HOST'),
       port: this.configService.get<number>('REDIS_DATABASE_PORT'),
@@ -27,7 +35,18 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
     this.pub = new Redis(redisInfo);
     this.sub = new Redis(redisInfo);
+    const kafka = new Kafka({
+      clientId: 'test-app',
+      brokers: ['localhost:9092']
+    });
 
+    this.producer=kafka.producer()
+    this.cosumer=kafka.consumer({ groupId: 'test-group' })
+
+    this.producer.connect()
+    this.cosumer.connect()
+
+    this.cosumer.subscribe({ topic: 'test-topic', fromBeginning: true });
     this.sub.subscribe('user_online', 'user_offline', 'send_message');
     this.sub.on('message', (channel, message) => {
       const payload = JSON.parse(message);
@@ -42,6 +61,23 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
           this.handleMessageRedis(payload);
           break;
       }
+    });
+    this.cosumer.run({
+      eachMessage: async ({ topic, partition, message,pause }) => {
+        const messageObject=JSON.parse(message.value)
+        console.log("data")
+        console.log(messageObject)
+        try{
+          const timestamp = new Date(); 
+          await this.messageRepository.insert({sender:messageObject.sender, recipient: messageObject.recipient, message:messageObject.message,timestamp})
+        }catch(error){
+          console.log(error)
+          pause()
+          setTimeout(()=>{this.cosumer.resume([{ topic:"test-topic" }])},60*10000)
+        }
+       
+        console.log("data inserted")
+      },
     });
   }
 
@@ -91,6 +127,12 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const { sender, recipient, message } = payload;
     const messageObject = { id: new Date().getTime(), sender, recipient, message,clientId:client.id};
     this.pub.publish('send_message', JSON.stringify(messageObject));
+    this.producer.send({
+        topic: 'test-topic',
+        messages:[{
+          value:JSON.stringify({...messageObject})
+        }]
+    })
   }
 
   private broadcastActiveUsers(): void {
@@ -150,4 +192,5 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       });
     }
   }
+
 }
