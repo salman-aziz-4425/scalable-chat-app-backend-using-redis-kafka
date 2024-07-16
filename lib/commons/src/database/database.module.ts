@@ -23,6 +23,12 @@ import { User } from 'user/src/models/user.model';
         entities: [
            User,
           ],
+          ssl: {
+            rejectUnauthorized: false,
+            ca: configService.get<string>('DATABASE_SSL_CA'),
+            key: configService.get<string>('DATABASE_SSL_KEY'),
+            cert: configService.get<string>('DATABASE_SSL_CERT'),
+          },
       }),
       inject: [ConfigService],
     }),
