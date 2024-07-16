@@ -1,20 +1,8 @@
 import { SubscribeMessage, WebSocketGateway, WebSocketServer, OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import Redis from 'ioredis';
+import { ConfigService } from '@nestjs/config';
 
-const pub = new Redis({
-  host: 'caching-20be2dee-salmanaziz216-1f0e.i.aivencloud.com',
-  port: 26013,
-  username: 'default',
-  password: 'AVNS_IcLsIPseyFo2wITlXJ7',
-});
-
-const sub = new Redis({
-  host: 'caching-20be2dee-salmanaziz216-1f0e.i.aivencloud.com',
-  port: 26013,
-  username: 'default',
-  password: 'AVNS_IcLsIPseyFo2wITlXJ7',
-});
 
 @WebSocketGateway({
   cors: {
@@ -27,10 +15,21 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @WebSocketServer() server: Server;
 
   private connectedUsers: Map<string, string[]> = new Map();
+  private pub: Redis;
+  private sub: Redis;
 
-  constructor() {
-    sub.subscribe('user_online', 'user_offline', 'send_message');
-    sub.on('message', (channel, message) => {
+  constructor(private readonly configService: ConfigService) {
+    const redisInfo={
+      host:  this.configService.get<string>('REDIS_DATABASE_HOST'),
+      port: this.configService.get<number>('REDIS_DATABASE_PORT'),
+      username: this.configService.get<string>('REDIS_DATABASE_USERNAME'),
+      password: this.configService.get<string>('REDIS_DATABASE_PASSWORD'),
+    }
+    this.pub = new Redis(redisInfo);
+    this.sub = new Redis(redisInfo);
+
+    this.sub.subscribe('user_online', 'user_offline', 'send_message');
+    this.sub.on('message', (channel, message) => {
       const payload = JSON.parse(message);
       switch (channel) {
         case 'user_online':
@@ -75,7 +74,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       }
     }
 
-    pub.publish('user_online', JSON.stringify(payload));
+    this.pub.publish('user_online', JSON.stringify(payload));
     this.broadcastActiveUsers();
   }
 
@@ -83,7 +82,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   handleUserOffline(client: Socket, payload: { email: string }): void {
     console.log(`${payload.email} is offline`);
     this.removeSocketIdFromEmail(client.id);
-    pub.publish('user_offline', JSON.stringify(payload));
+    this.pub.publish('user_offline', JSON.stringify(payload));
     this.broadcastActiveUsers();
   }
 
@@ -91,7 +90,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   handleMessage(client: Socket, payload: { sender: string, recipient: string, message: string }): void {
     const { sender, recipient, message } = payload;
     const messageObject = { id: new Date().getTime(), sender, recipient, message,clientId:client.id};
-    pub.publish('send_message', JSON.stringify(messageObject));
+    this.pub.publish('send_message', JSON.stringify(messageObject));
   }
 
   private broadcastActiveUsers(): void {
