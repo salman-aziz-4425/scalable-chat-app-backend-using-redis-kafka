@@ -45,29 +45,36 @@ $ npm run start:dev
 $ npm run start:prod
 ```
 
-## Test
+## Kafka Installation
+
+<img src="https://github.com/user-attachments/assets/189e185b-0fe6-44c7-9759-9cce8a693925" alt="Image" width="200" height="200" style="background-color: white;">
 
 ```bash
-# unit tests
-$ npm run test
+# docker-compose.yaml
 
-# e2e tests
-$ npm run test:e2e
+version: '3.8'
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper:3.4.6
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+  kafka:
+    image: wurstmeister/kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
-# test coverage
-$ npm run test:cov
 ```
 
-## Support
+## Redis Installation
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+<img src="https://github.com/user-attachments/assets/75538d64-f52f-427d-91e4-5cfde9ebf2e0" alt="Image" width="200" height="200">
 
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](LICENSE).
+### redis installation also requires aiven is used in this https://aiven.io/
