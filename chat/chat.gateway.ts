@@ -1,11 +1,13 @@
-import { SubscribeMessage, WebSocketGateway, WebSocketServer, OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
 import Redis from 'ioredis';
+
 import { ConfigService } from '@nestjs/config';
-import { Kafka } from 'kafkajs';
-import { DeepPartial, Repository } from 'typeorm';
-import { Message } from 'user/src/models/message.model';
 import { InjectRepository } from '@nestjs/typeorm';
+import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessage, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
+import { Kafka } from 'kafkajs';
+import { Repository } from 'typeorm';
+import { Server, Socket } from 'socket.io';
+
+import { Message } from 'user/src/models/message.model';
 
 
 @WebSocketGateway({
@@ -46,7 +48,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.producer.connect()
     this.cosumer.connect()
 
-    this.cosumer.subscribe({ topic: 'test-topic', fromBeginning: true });
+    this.cosumer.subscribe({ topic: 'chat-topic', fromBeginning: true });
     this.sub.subscribe('user_online', 'user_offline', 'send_message');
     this.sub.on('message', (channel, message) => {
       const payload = JSON.parse(message);
@@ -73,7 +75,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         }catch(error){
           console.log(error)
           pause()
-          setTimeout(()=>{this.cosumer.resume([{ topic:"test-topic" }])},60*10000)
+          setTimeout(()=>{this.cosumer.resume([{ topic:"chat-topic" }])},60*10000)
         }
        
         console.log("data inserted")
@@ -128,7 +130,7 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     const messageObject = { id: new Date().getTime(), sender, recipient, message,clientId:client.id};
     this.pub.publish('send_message', JSON.stringify(messageObject));
     this.producer.send({
-        topic: 'test-topic',
+        topic: 'chat-topic',
         messages:[{
           value:JSON.stringify({...messageObject})
         }]
