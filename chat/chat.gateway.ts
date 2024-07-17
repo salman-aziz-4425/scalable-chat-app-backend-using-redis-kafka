@@ -3,12 +3,11 @@ import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessage, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
-import { Kafka } from 'kafkajs';
+import { Consumer, EachMessagePayload, Kafka, KafkaConfig, Producer } from 'kafkajs';
 import { Repository } from 'typeorm';
 import { Server, Socket } from 'socket.io';
 
 import { Message } from 'user/src/models/message.model';
-
 
 @WebSocketGateway({
   cors: {
@@ -23,27 +22,29 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   private connectedUsers: Map<string, string[]> = new Map();
   private pub: Redis;
   private sub: Redis;
-  private producer:any;
-  private cosumer:any;
+  private producer:Producer;
+  private cosumer: Consumer;
 
   constructor(private readonly configService: ConfigService,
     @InjectRepository(Message)
     private readonly messageRepository: Repository<Message>) {
-    const redisInfo={
-      host:  this.configService.get<string>('REDIS_DATABASE_HOST'),
+    const redisInfo = {
+      host: this.configService.get<string>('REDIS_DATABASE_HOST'),
       port: this.configService.get<number>('REDIS_DATABASE_PORT'),
       username: this.configService.get<string>('REDIS_DATABASE_USERNAME'),
       password: this.configService.get<string>('REDIS_DATABASE_PASSWORD'),
     }
     this.pub = new Redis(redisInfo);
     this.sub = new Redis(redisInfo);
-    const kafka = new Kafka({
+
+    const kafkaConfig: KafkaConfig = {
       clientId: 'test-app',
       brokers: ['localhost:9092']
-    });
+    }
+    const kafka = new Kafka(kafkaConfig)
 
-    this.producer=kafka.producer()
-    this.cosumer=kafka.consumer({ groupId: 'test-group' })
+    this.producer = kafka.producer()
+    this.cosumer = kafka.consumer({ groupId: 'test-group' })
 
     this.producer.connect()
     this.cosumer.connect()
@@ -65,19 +66,17 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       }
     });
     this.cosumer.run({
-      eachMessage: async ({ topic, partition, message,pause }) => {
-        const messageObject=JSON.parse(message.value)
-        console.log("data")
-        console.log(messageObject)
-        try{
-          const timestamp = new Date(); 
-          await this.messageRepository.insert({sender:messageObject.sender, recipient: messageObject.recipient, message:messageObject.message,timestamp})
-        }catch(error){
+      eachMessage: async ({ topic, partition, message, pause }:EachMessagePayload) => {
+        const messageObject:any = JSON.parse(message.value as any)
+        try {
+          const timestamp = new Date();
+          await this.messageRepository.insert({ sender: messageObject.sender, recipient: messageObject.recipient, message: messageObject.message, timestamp })
+        } catch (error) {
           console.log(error)
           pause()
-          setTimeout(()=>{this.cosumer.resume([{ topic:"chat-topic" }])},60*10000)
+          setTimeout(() => { this.cosumer.resume([{ topic: "chat-topic" }]) }, 60 * 10000)
         }
-       
+
         console.log("data inserted")
       },
     });
@@ -101,39 +100,24 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
   @SubscribeMessage('user_online')
   handleUserOnline(client: Socket, payload: { email: string }): void {
     console.log(`${payload.email} is online`);
-
-    if (!this.connectedUsers.has(payload.email)) {
-      this.connectedUsers.set(payload.email, [client.id]);
-    } else {
-      const socketIds = this.connectedUsers.get(payload.email);
-      if (socketIds && !socketIds.includes(client.id)) {
-        socketIds.push(client.id);
-        this.connectedUsers.set(payload.email, socketIds);
-      }
-    }
-
-    this.pub.publish('user_online', JSON.stringify(payload));
-    this.broadcastActiveUsers();
+    this.pub.publish('user_online', JSON.stringify({...payload,id:client.id}));
   }
 
   @SubscribeMessage('user_offline')
   handleUserOffline(client: Socket, payload: { email: string }): void {
-    console.log(`${payload.email} is offline`);
-    this.removeSocketIdFromEmail(client.id);
-    this.pub.publish('user_offline', JSON.stringify(payload));
-    this.broadcastActiveUsers();
+    this.pub.publish('user_offline', JSON.stringify({...payload,id:client.id}));
   }
 
   @SubscribeMessage('send_message')
   handleMessage(client: Socket, payload: { sender: string, recipient: string, message: string }): void {
     const { sender, recipient, message } = payload;
-    const messageObject = { id: new Date().getTime(), sender, recipient, message,clientId:client.id};
+    const messageObject = { id: new Date().getTime(), sender, recipient, message, clientId: client.id };
     this.pub.publish('send_message', JSON.stringify(messageObject));
     this.producer.send({
-        topic: 'chat-topic',
-        messages:[{
-          value:JSON.stringify({...messageObject})
-        }]
+      topic: 'chat-topic',
+      messages: [{
+        value: JSON.stringify({ ...messageObject })
+      }]
     })
   }
 
@@ -164,29 +148,35 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     }
   }
 
-  private handleUserOnlineRedis(payload: { email: string }): void {
+  private handleUserOnlineRedis(payload: { email: string,id:string }): void {
     if (!this.connectedUsers.has(payload.email)) {
-      this.connectedUsers.set(payload.email, []);
+      this.connectedUsers.set(payload.email, [payload.id]);
+    } else {
+      const socketIds = this.connectedUsers.get(payload.email);
+      if (socketIds && !socketIds.includes(payload.id)) {
+        socketIds.push(payload.id);
+        this.connectedUsers.set(payload.email, socketIds);
+      }
     }
+
     this.broadcastActiveUsers();
   }
 
-  private handleUserOfflineRedis(payload: { email: string }): void {
-    if (this.connectedUsers.has(payload.email)) {
-      this.connectedUsers.delete(payload.email);
-    }
+  private handleUserOfflineRedis(payload: { email: string ,id:string}): void {
+    console.log(`${payload.email} is offline`);
+    this.removeSocketIdFromEmail(payload.id);
     this.broadcastActiveUsers();
   }
 
-  private handleMessageRedis(payload: { id: number, sender: string, recipient: string, message: string,clientId:string }): void {
-    const { sender, recipient, message,clientId } = payload;
+  private handleMessageRedis(payload: { id: number, sender: string, recipient: string, message: string, clientId: string }): void {
+    const { sender, recipient,clientId } = payload;
     const recipientSocketIds = this.getSocketIdsByEmail(recipient);
     const senderSocketIds = this.getSocketIdsByEmail(sender);
     const recipients = recipientSocketIds ? [...recipientSocketIds, ...senderSocketIds] : [];
-    
+
     if (recipients && recipients.length > 0) {
       recipients.forEach(socketId => {
-        if(socketId!==clientId){
+        if (socketId !== clientId) {
           this.server.to(socketId).emit('receive_message', payload);
         }
       });
