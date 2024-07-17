@@ -5,10 +5,11 @@ import { DatabaseModule } from 'lib/commons/src/database/database.module';
 import { UserController } from './user.controller';
 import { UserService } from './user.service';
 import { User } from './models/user.model';
+import { Message } from './models/message.model';
 
 
 @Module({
-  imports: [DatabaseModule.forfeature([User]),AuthModule],
+  imports: [DatabaseModule,DatabaseModule.forfeature([User,Message]),AuthModule],
   controllers: [UserController],
   providers: [UserService],
 })
