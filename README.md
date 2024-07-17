@@ -78,3 +78,18 @@ services:
 <img src="https://github.com/user-attachments/assets/75538d64-f52f-427d-91e4-5cfde9ebf2e0" alt="Image" width="200" height="200">
 
 ### redis installation also requires aiven is used in this https://aiven.io/
+
+## Required envs
+
+```bash
+DATABASE_HOST=
+DATABASE_PORT=
+DATABASE_USERNAME=
+DATABASE_PASSWORD=
+DATABASE_NAME=
+REDIS_DATABASE_HOST=
+REDIS_DATABASE_PORT=
+REDIS_DATABASE_USERNAME=
+REDIS_DATABASE_PASSWORD=
+```
+
