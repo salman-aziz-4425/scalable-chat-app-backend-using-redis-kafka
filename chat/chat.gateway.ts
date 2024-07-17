@@ -158,7 +158,6 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
         this.connectedUsers.set(payload.email, socketIds);
       }
     }
-
     this.broadcastActiveUsers();
   }
 
