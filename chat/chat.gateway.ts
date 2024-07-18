@@ -1,10 +1,11 @@
-import Redis from 'ioredis';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessage, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import { Consumer, EachMessagePayload, Kafka, KafkaConfig, Producer } from 'kafkajs';
 import { Repository } from 'typeorm';
 import { Server, Socket } from 'socket.io';
+import { createAdapter } from 'socket.io-redis';
+import Redis from 'ioredis';
 
 import { Message } from 'user/src/models/message.model';
 
@@ -18,15 +19,15 @@ import { Message } from 'user/src/models/message.model';
 export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
 
-  private pub: Redis;
-  private sub: Redis;
   private producer: Producer;
   private consumer: Consumer;
+  private pubClient: Redis;
+  private subClient: Redis;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Message)
-    private readonly messageRepository: Repository<Message>,
+    private readonly messageRepository: Repository<Message>
   ) {
     const redisInfo = {
       host: this.configService.get<string>('REDIS_DATABASE_HOST'),
@@ -34,8 +35,9 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
       username: this.configService.get<string>('REDIS_DATABASE_USERNAME'),
       password: this.configService.get<string>('REDIS_DATABASE_PASSWORD'),
     };
-    this.pub = new Redis(redisInfo);
-    this.sub = new Redis(redisInfo);
+
+    this.pubClient = new Redis(redisInfo);
+    this.subClient = new Redis(redisInfo);
 
     const kafkaConfig: KafkaConfig = {
       clientId: 'test-app',
@@ -50,126 +52,118 @@ export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewa
     this.consumer.connect();
 
     this.consumer.subscribe({ topic: 'chat-topic', fromBeginning: true });
-    this.sub.subscribe('user_online', 'user_offline', 'send_message');
-    this.sub.on('message', (channel, message) => {
-      const payload = JSON.parse(message);
-      switch (channel) {
-        case 'user_online':
-          this.handleUserOnlineRedis(payload);
-          break;
-        case 'user_offline':
-          this.handleUserOfflineRedis(payload);
-          break;
-        case 'send_message':
-          this.handleMessageRedis(payload);
-          break;
-      }
-    });
     this.consumer.run({
       eachMessage: async ({ topic, partition, message, pause }: EachMessagePayload) => {
         const messageObject: any = JSON.parse(message.value as any);
         try {
           const timestamp = new Date();
           await this.messageRepository.insert({ sender: messageObject.sender, recipient: messageObject.recipient, message: messageObject.message, timestamp });
+          console.log("Data inserted");
         } catch (error) {
-          console.log(error);
+          console.error("Error inserting data", error);
           pause();
-          setTimeout(() => { this.consumer.resume([{ topic: "chat-topic" }]); }, 60 * 10000);
+          setTimeout(() => { this.consumer.resume([{ topic: "chat-topic" }]) }, 60 * 1000);
         }
-        console.log("data inserted");
       },
     });
   }
 
   afterInit(server: Server) {
+    server.adapter(createAdapter({ pubClient: this.pubClient, subClient: this.subClient }));
     console.log('WebSocket Gateway Initialized');
   }
 
   handleConnection(client: Socket) {
     console.log(`Client connected: ${client.id}`);
+    this.broadcastActiveUsers();
   }
 
   handleDisconnect(client: Socket) {
     console.log(`Client disconnected: ${client.id}`);
-    this.handleUserOffline(client);
+    this.removeSocketIdFromEmail(client.id);
+    this.broadcastActiveUsers();
   }
 
   @SubscribeMessage('user_online')
   handleUserOnline(client: Socket, payload: { email: string }): void {
-    console.log(`${payload.email} is online`);
-    this.pub.publish('user_online', JSON.stringify({ ...payload, id: client.id }));
+    console.log(`${payload.email} is online with socket ID: ${client.id}`);
+    this.handleUserOnlineRedis({ ...payload, id: client.id });
   }
 
   @SubscribeMessage('user_offline')
-  handleUserOffline(client: Socket, payload?: { email: string }): void {
-    if (!payload) {
-      this.removeSocketIdFromEmail(client.id);
-      this.broadcastActiveUsers();
-    } else {
-      this.pub.publish('user_offline', JSON.stringify({ ...payload, id: client.id }));
-    }
+  handleUserOffline(client: Socket, payload: { email: string }): void {
+    console.log(`${payload.email} is offline with socket ID: ${client.id}`);
+    this.handleUserOfflineRedis({ ...payload, id: client.id });
   }
 
   @SubscribeMessage('send_message')
-  handleMessage(client: Socket, payload: { sender: string, recipient: string, message: string }): void {
+  async handleMessage(client: Socket, payload: { sender: string, recipient: string, message: string }): Promise<void> {
     const { sender, recipient, message } = payload;
     const messageObject = { id: new Date().getTime(), sender, recipient, message, clientId: client.id };
-    this.pub.publish('send_message', JSON.stringify(messageObject));
-    this.producer.send({
-      topic: 'chat-topic',
-      messages: [{
-        value: JSON.stringify({ ...messageObject }),
-      }],
-    });
-  }
 
-  private async handleUserOnlineRedis(payload: { email: string, id: string }): Promise<void> {
-    await this.pub.sadd(`user_socket:${payload.email}`, payload.id);
-    this.broadcastActiveUsers();
-  }
+    const recipientSocketIds = await this.getSocketIdsByEmail(recipient);
+    const senderSocketIds = await this.getSocketIdsByEmail(sender); 
 
-  private async handleUserOfflineRedis(payload: { email: string, id: string }): Promise<void> {
-    console.log(`${payload.email} is offline`);
-    await this.pub.srem(`user_socket:${payload.email}`, payload.id);
-    this.broadcastActiveUsers();
-  }
-
-  private async handleMessageRedis(payload: { id: number, sender: string, recipient: string, message: string, clientId: string }): Promise<void> {
-    console.log("message");
-    const { sender, recipient, clientId } = payload;
-    const recipientSocketIds = await this.pub.smembers(`user_socket:${recipient}`);
-    const senderSocketIds = await this.pub.smembers(`user_socket:${sender}`);
-    const recipients = [...recipientSocketIds, ...senderSocketIds];
-
-    if (recipients && recipients.length > 0) {
+    const recipients = [...new Set([...(recipientSocketIds || []), ...(senderSocketIds || [])])];
+    
+    console.log(`Recipients: ${recipients}`);
+    
+    if (recipients.length > 0) {
       recipients.forEach(socketId => {
-        if (socketId !== clientId) {
-          this.server.to(socketId).emit('receive_message', payload);
+        if (socketId !== client.id) {
+          console.log(socketId)
+          this.server.to(socketId).emit('receive_message', messageObject);
         }
       });
     }
+
+    this.producer.send({
+      topic: 'chat-topic',
+      messages: [{
+        value: JSON.stringify({ ...messageObject })
+      }]
+    });
   }
 
   private async broadcastActiveUsers(): Promise<void> {
-    const keys = await this.pub.keys('user_socket:*');
+    const keys = await this.pubClient.keys('user:*');
     const activeUsers = keys.map(key => key.split(':')[1]);
     console.log('Users broadcasted');
     console.log(activeUsers);
     this.server.emit('active_user', activeUsers);
   }
 
+  private async getSocketIdsByEmail(email: string): Promise<string[] | undefined> {
+    const socketIds = await this.pubClient.smembers(`user:${email}`);
+    return socketIds.length > 0 ? socketIds : undefined;
+  }
+
   private async removeSocketIdFromEmail(socketId: string): Promise<void> {
-    const keys = await this.pub.keys('user_socket:*');
+    const keys = await this.pubClient.keys('user:*');
     for (const key of keys) {
-      const email = key.split(':')[1];
-      const socketIds = await this.pub.smembers(key);
+      const socketIds = await this.pubClient.smembers(key);
       if (socketIds.includes(socketId)) {
-        await this.pub.srem(key, socketId);
-        if ((await this.pub.scard(key)) === 0) {
-          await this.pub.del(key);
+        await this.pubClient.srem(key, socketId);
+        if ((await this.pubClient.scard(key)) === 0) {
+          await this.pubClient.del(key);
         }
         break;
       }
     }
+  }
+
+  private async handleUserOnlineRedis(payload: { email: string, id: string }): Promise<void> {
+    await this.pubClient.sadd(`user:${payload.email}`, payload.id);
+    this.broadcastActiveUsers();
+  }
+
+  private async handleUserOfflineRedis(payload: { email: string, id: string }): Promise<void> {
+    console.log(`${payload.email} is offline`);
+    await this.pubClient.srem(`user:${payload.email}`, payload.id);
+    const remainingSocketIds = await this.pubClient.smembers(`user:${payload.email}`);
+    if (remainingSocketIds.length === 0) {
+      await this.pubClient.del(`user:${payload.email}`);
+    }
+    this.broadcastActiveUsers();
   }
 }
