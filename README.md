@@ -78,7 +78,7 @@ services:
 
 <img src="https://github.com/user-attachments/assets/75538d64-f52f-427d-91e4-5cfde9ebf2e0" alt="Image" width="200" height="200">
 
-### redis installation also requires aiven is used in this https://aiven.io/
+Redis installation also requires aiven is used in this https://aiven.io/
 
 ## Required envs
 
