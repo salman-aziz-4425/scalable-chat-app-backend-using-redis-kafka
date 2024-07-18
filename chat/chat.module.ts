@@ -6,7 +6,7 @@ import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 
 @Module({
-  imports: [DatabaseModule.forfeature([Message])],
+  imports: [DatabaseModule,DatabaseModule.forfeature([Message])],
   controllers: [ChatController],
   providers: [ChatGateway,ChatService],
 })
